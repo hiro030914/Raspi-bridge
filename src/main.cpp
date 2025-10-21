@@ -6,9 +6,11 @@
 #include <string>                // For std::string
 #include <mbedtls/base64.h>      // For Base64 encoding/decoding
 
-int fd;
-unsigned char buffer[256];
-ssize_t bytesRead;
+
+int main() {
+  int fd;
+  unsigned char buffer[256];
+  ssize_t bytesRead;
 
 fd = open("/dev/ttyAMA0", O_RDONLY | O_NOCTTY | O_NDELAY);
   if (fd == -1) {
@@ -58,7 +60,7 @@ fd = open("/dev/ttyAMA0", O_RDONLY | O_NOCTTY | O_NDELAY);
        std::cout << "Saved decoded data to " << fileName << std::endl;
 
       // register Cefore
-      std::strung cefName = "ccnx:/lora/data/" + fileName;
+      std::string cefName = "ccnx:/lora/data/" + fileName;
       std::string cmd = "cefputfile " + cefName + " " + fileName;
       system(cmd.c_str());
       std::cout << "Registered to Cefore: " << cefName << std::endl;
@@ -69,3 +71,7 @@ fd = open("/dev/ttyAMA0", O_RDONLY | O_NOCTTY | O_NDELAY);
 
      usleep(100000); // Sleep for 0.1s
     }
+  
+  close(fd);
+  return 0;
+}
