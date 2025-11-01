@@ -2,20 +2,23 @@
 #include "Arduino.h"
 #include "mbedtls/base64.h"
 
-#define RF_FREQUENCY                925000000 // Hz
-#define TX_OUTPUT_POWER             14        // dBm
-#define LORA_BANDWIDTH              0         // 125 kHz
-#define LORA_SPREADING_FACTOR       7
-#define LORA_CODINGRATE             1         // 4/5
-#define LORA_PREAMBLE_LENGTH        8
-#define LORA_SYMBOL_TIMEOUT         0
-#define LORA_FIX_LENGTH_PAYLOAD_ON  false
-#define LORA_IQ_INVERSION_ON        false
+// LoRaパラメータ設定
+constexpr uint32_t RF_FREQUENCY = 925000000;             // LoRa周波数(Hz)
+constexpr int8_t TX_OUTPUT_POWER = 14;                   // 送信出力(dBm)
+constexpr int8_t LORA_BANDWIDTH = 0;                     // 125 kHz
+constexpr int8_t LORA_SPREADING_FACTOR = 7;              // SF7
+constexpr int8_t LORA_CODINGRATE = 1;                    // CR4/5
+constexpr int8_t LORA_PREAMBLE_LENGTH = 8;               // プレアンブル長 // 同期確認
+constexpr int32_t LORA_SYMBOL_TIMEOUT = 0;               // シンボルタイムアウト
+constexpr bool LORA_FIX_LENGTH_PAYLOAD_ON = false;       // 可変長ペイロード
+constexpr bool LORA_IQ_INVERSION_ON = false;             // IQ反転オフ
 
-#define RX_TIMEOUT_VALUE            1000
-#define BUFFER_SIZE                 64
-#define PACKET_QUEUE_SIZE           50
+// タイムアウトとバッファサイズ
+constexpr int32_t RX_TIMEOUT_VALUE = 1000;
+constexpr int32_t BUFFER_SIZE = 64;
+constexpr int32_t PACKET_QUEUE_SIZE = 50;
 
+// センサデータ受信パケット構造体
 struct Packet {
   uint8_t payload[BUFFER_SIZE];
   uint32_t node_id;
