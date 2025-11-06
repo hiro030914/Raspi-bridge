@@ -1,124 +1,128 @@
-#include "LoRaWan_APP.h"
-#include "Arduino.h"
-#include "mbedtls/base64.h"
+#include <iostream>  // 標準入出力
+#include <fstream>   // ファイル読み書き
+#include <fcntl.h>   // ファイル制御
+#include <termios.h> // シリアル通信，端末の入出力設定
+#include <unistd.h>  // UNIXの基本API
+#include <string>    // 文字列 ex)std::string
+#include <cstring>   // メモリ操作
+#include <algorithm> // アルゴリズム ex)std::remove
 
-#define RF_FREQUENCY                925000000 // Hz
-#define TX_OUTPUT_POWER             14        // dBm
-#define LORA_BANDWIDTH              0         // 125 kHz
-#define LORA_SPREADING_FACTOR       7
-#define LORA_CODINGRATE             1         // 4/5
-#define LORA_PREAMBLE_LENGTH        8
-#define LORA_SYMBOL_TIMEOUT         0
-#define LORA_FIX_LENGTH_PAYLOAD_ON  false
-#define LORA_IQ_INVERSION_ON        false
-
-#define RX_TIMEOUT_VALUE            1000
-#define BUFFER_SIZE                 64
-#define PACKET_QUEUE_SIZE           10
-
-constexpr byte HEADER = 0xAA;
-
-# pragma pack(1)
-struct SensorPacket {
-  uint32_t node_id;
-  float temp_data;
-  float humi_data;
-};
-
+#pragma pack(1)
 struct Packet {
-  uint16_t size;
-  SensorPacket payload;
-  int16_t rssi;
-  int8_t snr;
+    uint32_t node_id;
+    float temp_data;
+    float humi_data;
 };
 #pragma pack()
 
-Packet packet_queue[PACKET_QUEUE_SIZE];
-int packet_queue_head = 0;
-int packet_queue_tail = 0;
+int main() {
+    int fd;
+    unsigned char buffer[256];
+    ssize_t byteRead;
+    uint8_t check;
+    bool receiving = false;
+    int index = 0;
 
-bool enQueuePacket(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr) {
-  int next_tail = (packet_queue_tail + 1) % PACKET_QUEUE_SIZE;
-  if (next_tail == packet_queue_head) return false; // queue full
-  packet_queue[packet_queue_tail].size = size;
-  memcpy(&packet_queue[packet_queue_tail].payload, payload, size);
-  packet_queue[packet_queue_tail].rssi = rssi;
-  packet_queue[packet_queue_tail].snr = snr;
-  packet_queue_tail = next_tail;
-  return true;
-}
+    Packet packet;
 
-bool deQueuePacket(Packet *packet) {
-  if (packet_queue_head == packet_queue_tail) return false; // empty
-  memcpy(packet, &packet_queue[packet_queue_head], sizeof(Packet));
-  packet_queue_head = (packet_queue_head + 1) % PACKET_QUEUE_SIZE;
-  return true;
-}
+    fd = open("/dev/ttyAMA0", O_RDONLY | O_NOCTTY);
+    if (fd == -1) {
+        std::cerr << "Error opening serial port" << std::endl;
+        return 1;
+    }
 
-// UART送信
-void sendPacketUART(Packet *packet) {
-  char Header = 'H';
-  char Footer = 'F';
-  Serial2.write(&Header);
-  delay(1000);
-  ssize_t n = Serial2.write((uint8_t *)&packet->payload, sizeof(SensorPacket));
-  Serial.printf("send : %zd byte", n);
-  Serial2.write(&Footer);
-  Serial2.flush();
+    // Configure serial port settings
+    struct termios options;
+    tcgetattr(fd, &options);
+    cfsetispeed(&options, B115200);
+    cfsetospeed(&options, B115200);
+    options.c_cflag |= (CLOCAL | CREAD);
+    options.c_cflag &= ~PARENB;                         // No parity
+    options.c_cflag &= ~CSTOPB;                         // 1 stop bit
+    options.c_cflag &= ~CSIZE;                          // Clear current data size setting
+    options.c_cflag |= CS8;                             // 8 data bits
+    options.c_cflag &= ~CRTSCTS;                        // No hardware flow control
+    options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG); // Raw input
+    options.c_iflag &= ~(IXON | IXOFF | IXANY);         // No software flow control
+    options.c_oflag &= ~OPOST;                          // Raw output binary
+    tcsetattr(fd, TCSANOW, &options);
+    std::cout << "Packet correct size : " << sizeof(Packet) << std::endl;
+    std::cout << "Serial port configured. Listening for data..." << std::endl;
 
-  Serial.printf("[Bridge] UART送信: NodeID=%lu, Temp=%.2f, Humi=%.2f, RSSI=%d, SNR=%d\n",
-                packet->payload.node_id,
-                packet->payload.temp_data,
-                packet->payload.humi_data,
-                packet->rssi,
-                packet->snr);
+    while (true) {
+        // Read data from serial port
+        ssize_t n = read(fd, &check, 1);
+        if (n < 0) {
+            // std::cerr << "read error" << std::endl;
+            continue;
+        }
 
-  uint8_t *p = (uint8_t *)&packet->payload ;
-  Serial.print("payload hex : ");
-  for (size_t i = 0; i < sizeof(SensorPacket); i++){
-    Serial.printf("%02X ", p[i]);
-  }
-  Serial.println();
+        if (!receiving && check == 'H') {
+            tcflush(fd, TCIFLUSH);
+            std::cout << "receive start" << std::endl;
+            receiving = true;
+            index = 0;
+            continue;
+        }
 
-}
+        if (receiving && check == 'F') {
+            std::cout << "receive stop" << std::endl;
+            if (index == sizeof(Packet)) {
+                memcpy(&packet, buffer, sizeof(packet));
 
-static RadioEvents_t RadioEvents;
-bool lora_idle = true;
+                std::cout << "✅ Received Packet" << std::endl;
+                std::cout << "Node ID: 0x" << std::hex << packet.node_id << std::dec << std::endl;
+                std::cout << "Temp: " << packet.temp_data << " C, Humi: " << packet.humi_data << " %" << std::endl;
 
-void setup() {
-  Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, 47, 48); // UART通信
-  Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
+                // Write decoded data to file
+                float temperature = packet.temp_data;
+                float humidity = packet.humi_data;
+                std::cout << "Temperature: " << temperature << " C, Humidity: " << humidity << " %" << std::endl;
+                static int fileMax = 10; // Max number of files to save
+                // Write temperature data to file
+                static int fileCount_temp = 0;
+                fileCount_temp %= fileMax;                                                            // Rotate file count
+                std::string fileName_temp = "temp_data_" + std::to_string(fileCount_temp++) + ".txt"; // ex) temp_data_0.json, temp_data_1.json, ...
+                std::ofstream fout_temp(fileName_temp, std::ios::binary);
+                fout_temp << temperature;
+                fout_temp.close();
+                // Write temperature data to file
+                static int fileCount_humi = 0;
+                fileCount_humi %= fileMax;                                                            // Rotate file count
+                std::string fileName_humi = "humi_data_" + std::to_string(fileCount_humi++) + ".txt"; // ex) humi_data_0.json, humi_data_1.json, ...
+                std::ofstream fout_humi(fileName_humi, std::ios::binary);
+                fout_humi << humidity;
+                fout_humi.close();
+                // register Cefore temperature file
+                std::string cefName_temp = "ccnx:/lora/data/CH1/temp";
+                std::string cmd_temp = "cefputfile " + cefName_temp + " -f " + fileName_temp;
+                system(cmd_temp.c_str());
+                std::cout << "Registered to Cefore temperature file: " << cefName_temp << " " << fileName_temp << std::endl;
+                // register Cefore humidity file
+                std::string cefName_humi = "ccnx:/lora/data/CH1/humi";
+                std::string cmd_humi = "cefputfile " + cefName_humi + " -f " + fileName_humi;
+                system(cmd_humi.c_str());
+                std::cout << "Registered to Cefore humidity file: " << cefName_humi << " " << fileName_humi << std::endl;
+            } else {
+                std::cout << "size mismatch got : " << index << std::endl;
+            }
+            receiving = false;
+            continue;
+        }
 
-  RadioEvents.RxDone = OnRxDone;
-  Radio.Init(&RadioEvents);
-  Radio.SetChannel(RF_FREQUENCY);
-  Radio.SetRxConfig(MODEM_LORA, LORA_BANDWIDTH, LORA_SPREADING_FACTOR,
-                    LORA_CODINGRATE, 0, LORA_PREAMBLE_LENGTH,
-                    LORA_SYMBOL_TIMEOUT, LORA_FIX_LENGTH_PAYLOAD_ON,
-                    0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
+        if (receiving) {
+            if (index < sizeof(Packet)) {
+                buffer[index++] = check;
+            } else {
+                receiving = false;
+                index = 0;
+                std::cerr << "buffer Overflow!" << std::endl;
+            }
+        }
 
-  Serial.println("Bridge Node Ready. Waiting for LoRa packets...");
-}
+        usleep(100000); // Sleep for 0.1s
+    }
 
-void loop() {
-  Packet packet;
-  if (lora_idle) {
-    lora_idle = false;
-    Radio.Rx(0);
-  }
-  Radio.IrqProcess();
-
-  // デキューしてUART送信
-  if (deQueuePacket(&packet)) {
-    sendPacketUART(&packet);
-  }
-}
-
-void OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr) {
-  Radio.Sleep();
-  if (!enQueuePacket(payload, size, rssi, snr)) {
-    Serial.println("⚠️ Queue full, packet dropped.");
-  }
-  lora_idle = true;
+    close(fd);
+    return 0;
 }
