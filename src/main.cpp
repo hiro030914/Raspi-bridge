@@ -65,6 +65,8 @@ int main() {
 
     // 変更を反映
     tcsetattr(fd, TCSANOW, &options);
+    std::cout << "Packet correct size : " << sizeof(Packet) << std::endl;
+    std::cout << "Serial port configured. Listening for data..." << std::endl;
 
     // デバッグ用
     std::cout << "Packet correct size : " << sizeof(Packet) << std::endl;
